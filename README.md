@@ -6,6 +6,12 @@ A fully local RSS job aggregator that pulls listings from 100 tech job feeds and
 
 ---
 
+## Dashboard
+
+![JobAgent Dashboard](Dashboard.png)
+
+---
+
 ## Features
 
 - Aggregates **100 RSS feeds** across Engineering, AI/ML, DevOps, Data Science, Security, Design, Marketing, Web3, and more
@@ -73,6 +79,38 @@ feedparser   — RSS/Atom feed parsing
 flask        — Web server
 openpyxl     — Read .xlsx feed list
 requests     — HTTP fetching with timeout support
+```
+
+---
+
+## System Design
+
+```mermaid
+flowchart TD
+    A([Tech_Job_RSS_Feeds.xlsx\n100 feeds · source · category]) --> B[fetch_jobs.py]
+
+    B --> C{For each feed}
+    C -->|requests + timeout| D[RSS/Atom Feed URL]
+    D -->|feedparser| E[Parse entries\ntitle · url · date · description]
+    E --> F[(jobs.db\nSQLite)]
+    C -->|on error| G[fetch_errors.log]
+
+    F --> H[app.py\nFlask server]
+    H -->|render_template_string| I[HTTP GET /]
+
+    I --> J[Browser\nhttp://localhost:5000]
+
+    subgraph Dashboard [Dark-mode Dashboard — vanilla JS]
+        J --> K[Sidebar Filters\nsearch · category · source · date · sort]
+        K --> L[Live Filter Engine\nclient-side · no reload]
+        L --> M[Job Cards Grid\ntitle · badges · date · snippet]
+        M --> N[Load More\n200 per page]
+    end
+
+    style A fill:#1a1d27,color:#e2e4f0,stroke:#2e3350
+    style F fill:#1a1d27,color:#e2e4f0,stroke:#6c63ff
+    style Dashboard fill:#0f1117,color:#e2e4f0,stroke:#2e3350
+    style G fill:#1a1d27,color:#f87171,stroke:#f87171
 ```
 
 ---
