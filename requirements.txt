@@ -9,8 +9,11 @@ pypdf>=4.0.0
 python-docx>=1.0.0
 docx2pdf>=0.1.8
 
-# AI — Claude API (primary)
+# AI — pick one or both (auto-detected from env vars)
+# Option A: Anthropic Claude API directly
 anthropic>=0.34.0
+# Option B: OpenRouter (access Opus + any model via one key)
+# No extra package needed — uses requests (already listed above)
 
 # Browser automation (CV PDF generation + form filling)
 playwright>=1.40.0
@@ -18,5 +21,5 @@ playwright>=1.40.0
 # Config
 pyyaml>=6.0.1
 
-# Optional: Ollama fallback (not required)
+# Optional: Ollama fallback (local, no API key)
 # ollama>=0.1.0

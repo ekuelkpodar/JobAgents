@@ -1,8 +1,13 @@
-# JobAgent — AI Job Board + Application Autopilot
+# JobAgent v2 — AI Job Search Command Center
 
-A fully local job aggregator that pulls listings from 100 tech job feeds, matches them to your resume with AI, and lets you fill out a single **Application Profile** that browser agents can use to auto-apply on your behalf.
+A fully local AI job search pipeline. Aggregates 100+ RSS feeds, scores every role against your CV with an A-F grading engine, generates ATS-optimized tailored CVs per job, scans company career portals directly, and auto-fills application forms via Playwright — all running on your machine.
 
-![Python](https://img.shields.io/badge/Python-3.11+-blue) ![Flask](https://img.shields.io/badge/Flask-3.1-green) ![SQLite](https://img.shields.io/badge/Database-SQLite-orange) ![Ollama](https://img.shields.io/badge/AI-Ollama%20%2F%20LLaMA3-purple) ![Windows](https://img.shields.io/badge/Windows-compatible-0078D4?logo=windows)
+![Python](https://img.shields.io/badge/Python-3.11+-blue)
+![Flask](https://img.shields.io/badge/Flask-3.1-green)
+![SQLite](https://img.shields.io/badge/Database-SQLite-orange)
+![Claude API](https://img.shields.io/badge/AI-Claude%20API-blueviolet)
+![OpenRouter](https://img.shields.io/badge/AI-OpenRouter%20%2F%20Opus-8B5CF6)
+![Playwright](https://img.shields.io/badge/Browser-Playwright-45ba4b)
 
 ---
 
@@ -12,100 +17,210 @@ A fully local job aggregator that pulls listings from 100 tech job feeds, matche
 
 ---
 
+## What's New in v2
+
+| v1 | v2 |
+|---|---|
+| Basic LLaMA3 match score | **A-F grading across 10 weighted dimensions** via Claude API or OpenRouter |
+| No job classification | **Archetype detection** (AI/ML Engineer, DevOps, PM, etc.) |
+| RSS feeds only | **Direct portal scanning** — Greenhouse, Ashby, Lever APIs |
+| Profile export (DOCX/PDF/JSON) | **Per-job tailored CV** — ATS-keyword injected, Playwright PDF render |
+| No application automation | **Playwright form filler** — detects ATS, fills fields, confirms before submit |
+| No interview prep | **STAR+R story bank** with browser editor |
+| Single AI provider | **Claude API + OpenRouter (Opus)** — auto-detected, fallback chain |
+| No status tracking | **Pipeline status** per job: New → Applied → Interview → Offer |
+
+---
+
 ## Features
 
 | Feature | Detail |
 |---|---|
-| RSS Aggregator | 100 feeds across Engineering, AI/ML, DevOps, Data, Security, Design, Web3, and more |
-| Local SQLite | All jobs stored locally — no API keys, no external services |
-| Dark-mode Dashboard | Live search, category/source filters, date range, sort, pagination |
-| AI Resume Match | Upload your resume → LLaMA3 scores every job for fit |
-| Saved Jobs | Bookmark roles and review them in a dedicated tab |
-| **Application Profile** | Form that captures everything needed to auto-apply — exports to Word, PDF, or JSON |
-| **Browser Agent Ready** | JSON export feeds directly into AI browser agents (e.g. Playwright, Skyvern, LaVague) |
-| Resilient Fetcher | Skips failed feeds and logs errors; never crashes mid-run |
+| **RSS Aggregator** | 100+ feeds across Engineering, AI/ML, DevOps, Data, Security, Design, Web3 |
+| **A-F Grading** | 10 weighted dimensions scored per job vs your `cv.md` — grade, score 0–100, gap bullets |
+| **Archetype Detection** | Classifies each job: AI/ML Engineer, DevOps/MLOps, PM, Backend, Frontend, etc. |
+| **ATS CV Generation** | Claude/Opus extracts JD keywords, rewrites bullet points, renders ATS-safe PDF |
+| **Portal Scanner** | Directly queries Greenhouse, Ashby, Lever APIs for 30+ AI/tech companies |
+| **Playwright Form Filler** | Auto-fills job application forms, calls AI for custom free-text answers |
+| **Status Pipeline** | Per-job status cycling: New → Saved → Applied → Phone Screen → Interview → Offer |
+| **STAR+R Story Bank** | Browser-editable behavioral interview story library |
+| **Batch Processor** | 5 parallel workers — drop URLs in a file, pipeline does the rest |
+| **Pipeline Integrity** | Dedup, status normalizer, health check auto-runs after each fetch |
+| **Go TUI** | Terminal dashboard (Bubble Tea + Lipgloss, Catppuccin Mocha) |
+| **Dark-mode Dashboard** | Grade badges, archetype tags, status filters, stats bar, live search |
 
 ---
 
-## Application Profile Form
+## How to Use
 
-`http://localhost:5000/profile`
+### Step 1 — Install dependencies
 
-Fill this out once and your browser agent handles the rest. The form covers every field a job application typically asks for beyond your resume and cover letter:
-
-- **Personal Info** — name, email, phone, location, LinkedIn, GitHub, portfolio
-- **Work Eligibility** — visa status, sponsorship needs, remote/hybrid preference, start date
-- **Work History** — repeating blocks for each role (title, company, dates, responsibilities, manager)
-- **Education** — degrees, majors, GPA, graduation dates
-- **Skills & Certifications** — tech stack, tools, languages, licenses
-- **Screening Answers** — pre-written responses to "Why this company?", strengths, 5-year plan, etc.
-- **Portfolio / Work Samples** — project links with descriptions
-- **References** — names, titles, contact info
-- **Compensation** — desired salary range, currency, notes for negotiation
-- **EEO & Compliance** — optional diversity fields, background check consent
-
-### Export formats
-
-| Format | Use case |
-|---|---|
-| `.docx` | Human-readable copy, works out of the box |
-| `.pdf` | Requires `pip install docx2pdf` |
-| `.json` | Machine-readable flat file — feed directly to a browser agent |
-
----
-
-## Quickstart
-
-> **Windows users:** fully supported on Windows 10/11. Use the same commands below in PowerShell, Command Prompt, or Git Bash.
-
-### 1. Install dependencies
 ```bash
+git clone https://github.com/ekuelkpodar/JobAgents.git
+cd JobAgents
+python3 -m venv venv && source venv/bin/activate   # Windows: venv\Scripts\activate
 pip install -r requirements.txt
+playwright install chromium   # only needed for CV PDF generation and form filling
 ```
 
-### 2. Fetch jobs (~5–10 min on first run)
+### Step 2 — Set your AI provider
+
+Pick **one** (or both — the app auto-detects and falls back):
+
+**Option A: OpenRouter** — gives you access to Opus and any other model with one key
+
+```bash
+export OPENROUTER_API_KEY=sk-or-...
+export OPENROUTER_MODEL=anthropic/claude-opus-4-5   # default, can change to any model
+```
+
+**Option B: Anthropic Claude API directly**
+
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...
+```
+
+**Option C: No API key** — the app still works using local keyword-based scoring (no AI grading). Useful for browsing and searching without any cost.
+
+> **Priority:** If both keys are set, you can choose with `export AI_PROVIDER=openrouter` or `export AI_PROVIDER=claude`. Otherwise the app auto-picks: OpenRouter → Claude → local.
+
+### Step 3 — Add your CV
+
+Edit `cv.md` with your real experience. This is what the AI scores every job against and uses to generate tailored CVs.
+
+```bash
+# Template is already at cv.md — fill it in:
+open cv.md   # or code cv.md, nano cv.md, etc.
+```
+
+### Step 4 — Fetch jobs
+
 ```bash
 python fetch_jobs.py
 ```
-Reads all feeds from `Tech_Job_RSS_Feeds.xlsx`, stores results in `jobs.db`. Feed errors are logged to `fetch_errors.log` and skipped automatically.
 
-### 3. Start the server
+Reads all 100+ RSS feeds from `Tech_Job_RSS_Feeds.xlsx`, stores results in `jobs.db`. Automatically runs a health check when done.
+
+### Step 5 — Start the server
+
 ```bash
 python app.py
 ```
 
-| URL | Page |
+| URL | What it is |
 |---|---|
-| http://localhost:5000 | Job board dashboard |
-| http://localhost:5000/profile | Application profile form |
+| [http://localhost:5000](http://localhost:5000) | Job board dashboard |
+| [http://localhost:5000/profile](http://localhost:5000/profile) | Application profile form |
+| [http://localhost:5000/stories](http://localhost:5000/stories) | Interview story bank editor |
+
+### Step 6 — Score jobs against your CV
+
+In the dashboard sidebar, click **Evaluate All** to grade every job in the background. Or click the **⚡ Evaluate** button on a specific card.
+
+Each job gets:
+- A letter grade (**A** = 85+, **B** = 70–84, **C** = 55–69, **D** = 40–54, **F** < 40)
+- A numeric score 0–100
+- An archetype label
+- A 3-bullet gap analysis
+
+### Step 7 — Generate a tailored CV
+
+Click **📄 Gen CV** on any job card. The AI:
+1. Extracts the top ATS keywords from the job description
+2. Rewrites your CV bullets to naturally include them
+3. Renders an ATS-safe PDF (no tables, no columns, Space Grotesk font)
+
+The PDF downloads automatically.
+
+### Step 8 — Scan company career portals directly
+
+Click **🔍 Scan Portals** in the stats bar. This hits Greenhouse/Ashby/Lever APIs directly for 30+ pre-configured AI companies (Anthropic, ElevenLabs, Notion, n8n, etc.) and adds relevant roles to the DB.
+
+To add more companies, edit `config/portals.yml`.
+
+### Step 9 — Auto-fill an application
+
+```bash
+python apply_agent.py <job_id>
+```
+
+Or click **View →** on a job card to get the URL, then run the agent. It:
+1. Opens a real browser (headed — you can watch)
+2. Detects the ATS (Greenhouse, Ashby, Lever, or generic)
+3. Fills all fields from `data/profile.json`
+4. Calls the AI for free-text answers ("Why this company?", etc.)
+5. Uploads your tailored PDF CV if one exists
+6. **Pauses and asks you to confirm before submitting**
+
+### Step 10 — Batch process a list of URLs
+
+Add job URLs to `batch/pending_urls.txt` (one per line), then:
+
+```bash
+bash batch_runner.sh
+```
+
+Processes 5 at a time in parallel. Results in `batch/batch_results.tsv`.
+
+---
+
+## AI Provider Reference
+
+| Provider | How to set | Default model | Best for |
+|---|---|---|---|
+| OpenRouter | `OPENROUTER_API_KEY` | `anthropic/claude-opus-4-5` | Highest quality scoring + CV gen |
+| Anthropic | `ANTHROPIC_API_KEY` | `claude-sonnet-4-6` | Direct API access |
+| Ollama | `AI_PROVIDER=ollama` | `llama3.2` | Fully local, no cost |
+| Local | *(no key)* | keyword matching | Browse only, no AI |
+
+Switch models via `OPENROUTER_MODEL=openai/gpt-4o` (or any OpenRouter-supported model).
 
 ---
 
 ## Project Structure
 
 ```
-JobAgent/
-├── fetch_jobs.py              # RSS fetcher — reads XLSX, populates jobs.db
-├── app.py                     # Flask server — dashboard + AI match + profile form
-├── requirements.txt           # Python dependencies
-├── Tech_Job_RSS_Feeds.xlsx    # 100 RSS feed URLs with source/category metadata
-└── README.md
-```
-
-> `jobs.db` and `fetch_errors.log` are generated at runtime.
-
----
-
-## Dependencies
-
-```
-feedparser     — RSS/Atom feed parsing
-flask          — Web server
-openpyxl       — Read .xlsx feed list
-requests       — HTTP fetching with timeout support
-pypdf          — PDF resume parsing
-python-docx    — Profile export to .docx
-docx2pdf       — (optional) Profile export to PDF
+JobAgents/
+├── app.py                      # Flask server — all routes and AI logic
+├── fetch_jobs.py               # RSS fetcher — reads XLSX, populates jobs.db
+├── scan_portals.py             # Direct career portal scraper (Greenhouse/Ashby/Lever)
+├── apply_agent.py              # Playwright application form filler
+├── generate_pdf.py             # Playwright ATS-safe CV PDF renderer
+├── health_check.py             # Pipeline health reporter (auto-runs after fetch)
+├── dedup_jobs.py               # Remove duplicate jobs from jobs.db
+├── normalize_status.py         # Canonicalize all job status values
+├── batch_runner.sh             # Parallel batch URL processor (5 workers)
+│
+├── cv.md                       # YOUR BASE CV — fill this in (used for all AI tasks)
+├── CLAUDE.md                   # Agent instructions for Claude Code
+│
+├── config/
+│   ├── portals.yml             # Company career portal configs (30+ pre-loaded)
+│   └── profile.example.yml    # Template for data/profile.json
+│
+├── templates/
+│   └── states.yml              # Canonical job status definitions
+│
+├── dashboard/
+│   ├── main.go                 # Go TUI (Bubble Tea + Lipgloss)
+│   └── go.mod
+│
+├── modes/                      # Claude Code slash command docs
+│   ├── evaluate.md
+│   └── _shared.md
+│
+├── data/                       # gitignored — your private data
+│   ├── profile.json            # Application profile (copy from config/profile.example.yml)
+│   ├── stories.md              # STAR+R interview story bank
+│   └── applications.tsv        # Application log
+│
+├── output/                     # gitignored — generated CVs (md + pdf)
+├── reports/                    # gitignored — interview prep reports
+├── batch/
+│   └── pending_urls.txt        # Drop job URLs here for batch processing
+│
+├── Tech_Job_RSS_Feeds.xlsx     # 100+ RSS feed URLs with source/category metadata
+└── requirements.txt
 ```
 
 ---
@@ -114,56 +229,163 @@ docx2pdf       — (optional) Profile export to PDF
 
 ```mermaid
 flowchart TD
-    A([Tech_Job_RSS_Feeds.xlsx\n100 feeds · source · category]) --> B[fetch_jobs.py]
-
-    B --> C{For each feed}
-    C -->|requests + timeout| D[RSS/Atom Feed URL]
-    D -->|feedparser| E[Parse entries\ntitle · url · date · description]
-    E --> F[(jobs.db\nSQLite)]
-    C -->|on error| G[fetch_errors.log]
-
-    F --> H[app.py\nFlask server]
-
-    H --> I[GET /\nJob Board Dashboard]
-    H --> I2[GET /profile\nApplication Profile Form]
-
-    I --> J[Browser\nhttp://localhost:5000]
-
-    subgraph Dashboard [Dark-mode Dashboard — vanilla JS]
-        J --> K[Sidebar Filters\nsearch · category · source · date · sort]
-        K --> L[Live Filter Engine\nclient-side · no reload]
-        L --> M[Job Cards Grid\ntitle · badges · date · snippet]
-        M --> N[Save Job ★]
+    subgraph Sources["Job Sources"]
+        XLSX([Tech_Job_RSS_Feeds.xlsx\n100+ feeds])
+        PORTALS([Company Career Portals\nGreenhouse · Ashby · Lever])
+        BATCH([batch/pending_urls.txt\nManual URL list])
     end
 
-    I --> O[POST /api/match\nResume Upload]
-    O -->|text extraction| P[pypdf / docx parser]
-    P -->|prompt| Q[Ollama LLaMA3\nlocalhost:11434]
-    Q -->|match score + reasoning| R[Ranked Job Results]
+    subgraph Ingest["Ingestion Layer"]
+        FETCH[fetch_jobs.py\nRSS fetcher]
+        SCAN[scan_portals.py\nPortal scraper]
+        BRUN[batch_runner.sh\n5 parallel workers]
+    end
 
-    I2 --> S[Profile Form\n10 sections · repeating blocks]
-    S -->|POST /api/profile/save| T{Export Format}
-    T -->|docx| U[Word Document\nDownload]
-    T -->|pdf| V[PDF\nDownload]
-    T -->|json| W[JSON File\nBrowser Agent Input]
+    XLSX --> FETCH
+    PORTALS --> SCAN
+    BATCH --> BRUN
+    FETCH --> DB
+    SCAN --> DB
+    BRUN --> DB
 
-    W --> X([AI Browser Agent\nPlaywright · Skyvern · LaVague])
-    X --> Y([Job Application Sites\nLinkedIn · Workday · Greenhouse])
+    DB[(jobs.db\nSQLite)]
 
-    style A fill:#1a1d27,color:#e2e4f0,stroke:#2e3350
-    style F fill:#1a1d27,color:#e2e4f0,stroke:#6c63ff
-    style Dashboard fill:#0f1117,color:#e2e4f0,stroke:#2e3350
-    style G fill:#1a1d27,color:#f87171,stroke:#f87171
-    style W fill:#1a1d27,color:#00d4aa,stroke:#00d4aa
-    style X fill:#1a1d27,color:#00d4aa,stroke:#00d4aa
-    style Y fill:#1a1d27,color:#fbbf24,stroke:#fbbf24
+    subgraph AI["AI Layer — provider auto-detected"]
+        PROVIDER{AI Provider}
+        OR[OpenRouter\nOpus / any model]
+        ANT[Anthropic\nClaude Sonnet]
+        OLL[Ollama\nLLaMA3 local]
+        LOCAL[Local\nKeyword scoring]
+        PROVIDER -->|OPENROUTER_API_KEY| OR
+        PROVIDER -->|ANTHROPIC_API_KEY| ANT
+        PROVIDER -->|AI_PROVIDER=ollama| OLL
+        PROVIDER -->|no key| LOCAL
+    end
+
+    DB --> APP
+
+    subgraph APP["app.py — Flask Server"]
+        direction TB
+        EVAL[POST /api/evaluate\nA-F grade · score · gaps · archetype]
+        GENCV[POST /api/generate-cv\nKeyword-injected tailored CV]
+        STATUS[PATCH /api/jobs/status\nPipeline status update]
+        HEALTH[GET /api/health\nPipeline health report]
+    end
+
+    AI --> EVAL
+    AI --> GENCV
+
+    subgraph CV_GEN["CV Generation"]
+        GENCV --> CVMD[output/cv_id.md]
+        CVMD --> PDF[generate_pdf.py\nPlaywright PDF render]
+        PDF --> CVPDF[output/cv_id.pdf\nATS-safe Space Grotesk]
+    end
+
+    subgraph APPLY["Auto-Apply"]
+        AGENT[apply_agent.py\nPlaywright form filler]
+        AGENT -->|detect ATS| ATS{ATS Platform}
+        ATS --> GH[Greenhouse]
+        ATS --> ASH[Ashby]
+        ATS --> LEV[Lever]
+        ATS --> GEN[Generic]
+        AI --> AGENT
+        CVPDF --> AGENT
+    end
+
+    subgraph INTEGRITY["Pipeline Integrity"]
+        DEDUP[dedup_jobs.py]
+        NORM[normalize_status.py]
+        HC[health_check.py\nauto-runs after fetch]
+    end
+
+    DB --> INTEGRITY
+
+    subgraph DASH["Dashboard — http://localhost:5000"]
+        WEB[Dark-mode Web UI\nVanilla JS · no framework]
+        TUI[Go TUI\nBubble Tea · Lipgloss\nCatppuccin Mocha]
+        WEB --> FILTERS[Grade · Archetype · Status\nCategory · Source · Date · Search]
+        WEB --> CARDS[Job Cards\nGrade badge · Archetype tag\nStatus pipeline · Gap bullets]
+        WEB --> STATSBAR[Stats Bar\nTotal · A-grade · Applied · Interviews]
+        WEB --> ACTIONS[Per-job Actions\nEvaluate · Gen CV · Copy JSON · Archive]
+    end
+
+    APP --> DASH
+    DB --> TUI
+
+    subgraph PROFILE["Profile & Stories"]
+        PRF[/profile\nApplication Profile Form]
+        STR[/stories\nSTAR+R Story Bank Editor]
+    end
+
+    APP --> PROFILE
+
+    style DB fill:#1a1d27,color:#e2e4f0,stroke:#6c63ff
+    style Sources fill:#0f1117,color:#e2e4f0,stroke:#2e3350
+    style AI fill:#0f1117,color:#e2e4f0,stroke:#8B5CF6
+    style DASH fill:#0f1117,color:#e2e4f0,stroke:#2e3350
+    style CV_GEN fill:#0f1117,color:#e2e4f0,stroke:#10b981
+    style APPLY fill:#0f1117,color:#e2e4f0,stroke:#f59e0b
+    style INTEGRITY fill:#0f1117,color:#e2e4f0,stroke:#ef4444
 ```
+
+---
+
+## Maintenance Commands
+
+```bash
+# Re-fetch all RSS feeds (run daily via cron)
+python fetch_jobs.py
+
+# Scan company career portals for new listings
+python scan_portals.py
+
+# Remove duplicate job entries
+python dedup_jobs.py
+
+# Standardize all status values
+python normalize_status.py
+
+# Run health check manually
+python health_check.py
+
+# Batch process URLs from batch/pending_urls.txt
+bash batch_runner.sh
+
+# Check which AI provider is active
+curl http://localhost:5000/api/provider
+```
+
+---
+
+## API Reference
+
+| Method | Route | Description |
+|---|---|---|
+| `GET` | `/api/jobs` | All jobs |
+| `GET` | `/api/jobs/<id>` | Single job with full fields |
+| `PATCH` | `/api/jobs/<id>/status` | Update pipeline status |
+| `POST` | `/api/evaluate/<id>` | Score a job against cv.md |
+| `POST` | `/api/evaluate-all` | Score all unscored jobs (background) |
+| `POST` | `/api/generate-cv/<id>` | Generate tailored ATS CV |
+| `GET` | `/api/download-cv/<id>` | Download generated CV PDF |
+| `POST` | `/api/scan` | Trigger portal scan (background) |
+| `POST` | `/api/apply/<id>` | Launch Playwright form filler |
+| `POST` | `/api/batch` | Run batch_runner.sh (background) |
+| `GET` | `/api/provider` | Show active AI provider + model |
+| `GET` | `/api/health` | Pipeline health report |
+| `GET` | `/api/stats` | Job count by category/source/date |
+| `POST` | `/api/upload-resume` | Parse a resume file |
+| `POST` | `/api/refresh` | Re-fetch all RSS feeds (background) |
+| `GET/POST` | `/api/stories` | Read/write interview story bank |
+| `GET` | `/api/saved-jobs` | Bookmarked jobs |
 
 ---
 
 ## Notes
 
-- ~55 of 100 feeds are currently active; the rest return 404/403/410 (dead or blocked URLs)
-- Indeed and Upwork RSS feeds are blocked; Dice RSS endpoints are defunct
-- Run `fetch_jobs.py` on a schedule (e.g. daily cron) to keep jobs fresh
-- AI matching requires [Ollama](https://ollama.com) running locally with the `llama3.2` model pulled
+- **cv.md is required** for AI scoring and CV generation — fill it in before clicking Evaluate
+- **data/profile.json** is required for the form filler — copy from `config/profile.example.yml`
+- `jobs.db` is gitignored — regenerate it with `fetch_jobs.py`
+- ~55 of 100 RSS feeds are active; dead feeds are logged to `fetch_errors.log` and skipped
+- Run `fetch_jobs.py` on a daily cron to keep jobs fresh
+- The Go TUI requires Go 1.21+ (`brew install go`) — `cd dashboard && go run .`

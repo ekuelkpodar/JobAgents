@@ -23,7 +23,10 @@ PROFILE_PATH = Path(__file__).parent / "data" / "profile.json"
 APP_LOG      = Path(__file__).parent / "data" / "applications.tsv"
 OUTPUT_DIR   = Path(__file__).parent / "output"
 
-ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+ANTHROPIC_API_KEY  = os.environ.get("ANTHROPIC_API_KEY", "")
+OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
+OPENROUTER_MODEL   = os.environ.get("OPENROUTER_MODEL", "anthropic/claude-opus-4-5")
+OPENROUTER_BASE    = "https://openrouter.ai/api/v1"
 
 
 def get_db():
@@ -59,18 +62,9 @@ def detect_ats(url: str) -> str:
 
 
 def claude_custom_answer(question: str, job: dict, profile: dict) -> str:
-    """Use Claude API to generate a tailored answer to a free-text field."""
-    if not ANTHROPIC_API_KEY:
-        return f"I am excited about this {job.get('title','')} opportunity."
-    try:
-        import anthropic
-        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-        p = profile.get("personal", {})
-        msg = client.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=300,
-            messages=[{"role": "user", "content":
-                f"""Write a concise, genuine answer (2-3 sentences max) to this application question.
+    """Use the configured AI provider to generate a tailored answer to a free-text field."""
+    p = profile.get("personal", {})
+    prompt = f"""Write a concise, genuine answer (2-3 sentences max) to this application question.
 Be specific, professional, and tailored to the company/role.
 
 Question: {question}
@@ -79,12 +73,40 @@ Company: {job.get('source','')}
 Candidate background: {p.get('first_name','')} {p.get('last_name','')} — skills aligned with {job.get('archetype','tech')}.
 
 Answer (no intro, no "Certainly", just the answer):"""
-            }]
-        )
-        return msg.content[0].text.strip()
-    except Exception as e:
-        print(f"[Claude answer error] {e}")
-        return f"I am passionate about this {job.get('title','')} role."
+
+    # Try OpenRouter first if configured
+    if OPENROUTER_API_KEY:
+        try:
+            import requests as req
+            headers = {
+                "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+                "Content-Type":  "application/json",
+                "HTTP-Referer":  "https://github.com/ekuelkpodar/JobAgents",
+                "X-Title":       "JobAgent",
+            }
+            r = req.post(f"{OPENROUTER_BASE}/chat/completions",
+                json={"model": OPENROUTER_MODEL, "max_tokens": 300,
+                      "messages": [{"role": "user", "content": prompt}]},
+                headers=headers, timeout=30)
+            r.raise_for_status()
+            return r.json()["choices"][0]["message"]["content"].strip()
+        except Exception as e:
+            print(f"[OpenRouter answer error] {e}")
+
+    # Fallback to Anthropic
+    if ANTHROPIC_API_KEY:
+        try:
+            import anthropic
+            client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+            msg = client.messages.create(
+                model="claude-sonnet-4-6", max_tokens=300,
+                messages=[{"role": "user", "content": prompt}]
+            )
+            return msg.content[0].text.strip()
+        except Exception as e:
+            print(f"[Claude answer error] {e}")
+
+    return f"I am passionate about this {job.get('title', '')} role at {job.get('source', '')}."
 
 
 def fill_greenhouse(page, profile: dict, job: dict, cv_pdf_path: str | None):

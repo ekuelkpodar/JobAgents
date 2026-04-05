@@ -16,11 +16,30 @@ OUTPUT_DIR  = Path(__file__).parent / "output"
 REPORTS_DIR.mkdir(exist_ok=True)
 OUTPUT_DIR.mkdir(exist_ok=True)
 
-ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+ANTHROPIC_API_KEY  = os.environ.get("ANTHROPIC_API_KEY", "")
+OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
+# AI_PROVIDER: "claude" | "openrouter" | "ollama" | "local"
+# Auto-detected from available keys if not set explicitly.
+AI_PROVIDER = os.environ.get("AI_PROVIDER", "")
+
+# OpenRouter model to use (Opus by default for highest quality)
+OPENROUTER_MODEL = os.environ.get("OPENROUTER_MODEL", "anthropic/claude-opus-4-5")
+OPENROUTER_BASE  = "https://openrouter.ai/api/v1"
 
 # Legacy Ollama (kept for fallback only)
 OLLAMA_API   = "http://localhost:11434/api/generate"
 OLLAMA_MODEL = "llama3.2"
+
+
+def _resolve_provider() -> str:
+    """Pick AI provider based on env vars. Priority: explicit > claude > openrouter > ollama > local."""
+    if AI_PROVIDER:
+        return AI_PROVIDER
+    if ANTHROPIC_API_KEY:
+        return "claude"
+    if OPENROUTER_API_KEY:
+        return "openrouter"
+    return "local"
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024  # 16 MB
@@ -241,16 +260,10 @@ def score_to_grade(score: int) -> str:
     if score >= 40: return "D"
     return "F"
 
-# ── Claude API evaluation (A-F, 10 dimensions) ───────────────────────────────
+# ── Shared eval prompt ────────────────────────────────────────────────────────
 
-def evaluate_with_claude(job: dict, cv_text: str) -> dict:
-    """Call Claude API to score a job across 10 weighted dimensions."""
-    if not ANTHROPIC_API_KEY:
-        return _evaluate_local(job, cv_text)
-    try:
-        import anthropic
-        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-        prompt = f"""You are an expert career coach evaluating job fit. Score this job against the candidate's CV.
+def _eval_prompt(job: dict, cv_text: str) -> str:
+    return f"""You are an expert career coach evaluating job fit. Score this job against the candidate's CV.
 
 Return ONLY a valid JSON object with these exact keys:
 {{
@@ -281,25 +294,93 @@ CANDIDATE CV:
 {cv_text[:3000]}
 
 JSON:"""
+
+def _parse_eval_response(raw: str, job: dict) -> dict | None:
+    m = re.search(r"\{[\s\S]+\}", raw)
+    if m:
+        data  = json.loads(m.group())
+        total = data.get("total", 0)
+        return {
+            "score":     int(total),
+            "grade":     data.get("grade", score_to_grade(total)),
+            "gaps":      json.dumps(data.get("gaps", [])),
+            "archetype": data.get("archetype", detect_archetype(job.get("title",""), job.get("description",""))),
+        }
+    return None
+
+# ── Provider: Anthropic Claude ────────────────────────────────────────────────
+
+def _eval_claude(job: dict, cv_text: str) -> dict | None:
+    try:
+        import anthropic
+        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
         msg = client.messages.create(
             model="claude-sonnet-4-6",
             max_tokens=600,
-            messages=[{"role": "user", "content": prompt}]
+            messages=[{"role": "user", "content": _eval_prompt(job, cv_text)}]
         )
-        raw = msg.content[0].text.strip()
-        m = re.search(r"\{[\s\S]+\}", raw)
-        if m:
-            data = json.loads(m.group())
-            total = data.get("total", 0)
-            return {
-                "score": int(total),
-                "grade": data.get("grade", score_to_grade(total)),
-                "gaps": json.dumps(data.get("gaps", [])),
-                "archetype": data.get("archetype", detect_archetype(job.get("title",""), job.get("description",""))),
-            }
+        return _parse_eval_response(msg.content[0].text.strip(), job)
     except Exception as e:
         print(f"[Claude eval error] {e}")
-    return _evaluate_local(job, cv_text)
+    return None
+
+# ── Provider: OpenRouter (Opus) ───────────────────────────────────────────────
+
+def _eval_openrouter(job: dict, cv_text: str) -> dict | None:
+    try:
+        import requests as req
+        headers = {
+            "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+            "Content-Type":  "application/json",
+            "HTTP-Referer":  "https://github.com/ekuelkpodar/JobAgents",
+            "X-Title":       "JobAgent",
+        }
+        body = {
+            "model": OPENROUTER_MODEL,
+            "max_tokens": 600,
+            "messages": [{"role": "user", "content": _eval_prompt(job, cv_text)}],
+        }
+        r = req.post(f"{OPENROUTER_BASE}/chat/completions", json=body, headers=headers, timeout=60)
+        r.raise_for_status()
+        raw = r.json()["choices"][0]["message"]["content"].strip()
+        return _parse_eval_response(raw, job)
+    except Exception as e:
+        print(f"[OpenRouter eval error] {e}")
+    return None
+
+# ── Main evaluate dispatcher ──────────────────────────────────────────────────
+
+def evaluate_with_claude(job: dict, cv_text: str) -> dict:
+    """Evaluate a job using the configured AI provider. Falls back to local if all fail."""
+    provider = _resolve_provider()
+    result   = None
+
+    if provider == "claude" and ANTHROPIC_API_KEY:
+        result = _eval_claude(job, cv_text)
+    elif provider == "openrouter" and OPENROUTER_API_KEY:
+        result = _eval_openrouter(job, cv_text)
+    elif provider == "ollama":
+        result = _eval_ollama_legacy(job, cv_text)
+
+    # Auto-fallback chain if primary fails
+    if result is None and ANTHROPIC_API_KEY and provider != "claude":
+        result = _eval_claude(job, cv_text)
+    if result is None and OPENROUTER_API_KEY and provider != "openrouter":
+        result = _eval_openrouter(job, cv_text)
+
+    return result or _evaluate_local(job, cv_text)
+
+def _eval_ollama_legacy(job: dict, cv_text: str) -> dict | None:
+    try:
+        import requests as req
+        prompt = _eval_prompt(job, cv_text)
+        r = req.post(OLLAMA_API, json={"model": OLLAMA_MODEL, "prompt": prompt, "stream": False}, timeout=90)
+        if r.status_code == 200:
+            raw = r.json().get("response", "")
+            return _parse_eval_response(raw, job)
+    except Exception as e:
+        print(f"[Ollama eval error] {e}")
+    return None
 
 def _evaluate_local(job: dict, cv_text: str) -> dict:
     """Fallback local scoring when Claude API is unavailable."""
@@ -642,11 +723,43 @@ def get_job(job_id):
         except Exception: pass
     return jsonify(j)
 
+def _ai_complete(prompt: str, max_tokens: int = 3000) -> str:
+    """Call the configured AI provider for a completion. Returns raw text."""
+    provider = _resolve_provider()
+
+    if provider == "openrouter" and OPENROUTER_API_KEY:
+        import requests as req
+        headers = {
+            "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+            "Content-Type":  "application/json",
+            "HTTP-Referer":  "https://github.com/ekuelkpodar/JobAgents",
+            "X-Title":       "JobAgent",
+        }
+        r = req.post(f"{OPENROUTER_BASE}/chat/completions",
+            json={"model": OPENROUTER_MODEL, "max_tokens": max_tokens,
+                  "messages": [{"role": "user", "content": prompt}]},
+            headers=headers, timeout=120)
+        r.raise_for_status()
+        return r.json()["choices"][0]["message"]["content"].strip()
+
+    if ANTHROPIC_API_KEY:
+        import anthropic
+        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+        msg = client.messages.create(
+            model="claude-sonnet-4-6", max_tokens=max_tokens,
+            messages=[{"role": "user", "content": prompt}]
+        )
+        return msg.content[0].text.strip()
+
+    raise RuntimeError("No AI provider configured. Set ANTHROPIC_API_KEY or OPENROUTER_API_KEY.")
+
+
 @app.route("/api/generate-cv/<int:job_id>", methods=["POST"])
 def generate_cv(job_id):
-    """Generate an ATS-optimized tailored CV for a specific job using Claude API."""
-    if not ANTHROPIC_API_KEY:
-        return jsonify({"error": "ANTHROPIC_API_KEY not set. Export it in your shell."}), 400
+    """Generate an ATS-optimized tailored CV for a specific job."""
+    provider = _resolve_provider()
+    if provider == "local":
+        return jsonify({"error": "No AI provider configured. Set ANTHROPIC_API_KEY or OPENROUTER_API_KEY."}), 400
     conn = get_db()
     row  = conn.execute("SELECT * FROM jobs WHERE id=?", [job_id]).fetchone()
     if not row:
@@ -657,8 +770,6 @@ def generate_cv(job_id):
     if not cv_text:
         return jsonify({"error": "cv.md not found. Add your CV to cv.md first."}), 400
     try:
-        import anthropic
-        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
         prompt = f"""You are an expert ATS resume writer. Tailor the candidate's CV for this specific job.
 
 Return a complete, tailored CV in markdown format. Requirements:
@@ -678,12 +789,7 @@ CANDIDATE'S BASE CV:
 {cv_text}
 
 TAILORED CV:"""
-        msg = client.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=3000,
-            messages=[{"role": "user", "content": prompt}]
-        )
-        tailored_cv = msg.content[0].text.strip()
+        tailored_cv = _ai_complete(prompt, max_tokens=3000)
         out_path = OUTPUT_DIR / f"cv_{job_id}.md"
         out_path.write_text(tailored_cv, encoding="utf-8")
         conn2 = get_db()
@@ -814,6 +920,25 @@ async function save(e) {{
 </body>
 </html>"""
     return Response(html, mimetype="text/html; charset=utf-8")
+
+@app.route("/api/provider")
+def api_provider():
+    """Return the active AI provider and model info."""
+    provider = _resolve_provider()
+    info = {
+        "provider":          provider,
+        "anthropic_key_set": bool(ANTHROPIC_API_KEY),
+        "openrouter_key_set":bool(OPENROUTER_API_KEY),
+    }
+    if provider == "openrouter":
+        info["model"] = OPENROUTER_MODEL
+    elif provider == "claude":
+        info["model"] = "claude-sonnet-4-6 (eval) / claude-sonnet-4-6 (cv)"
+    elif provider == "ollama":
+        info["model"] = OLLAMA_MODEL
+    else:
+        info["model"] = "local (keyword-based, no AI key set)"
+    return jsonify(info)
 
 @app.route("/api/health")
 def api_health():
