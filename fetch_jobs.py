@@ -203,3 +203,9 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+    # Auto-run health check after fetch
+    try:
+        import health_check
+        health_check.check()
+    except Exception:
+        pass

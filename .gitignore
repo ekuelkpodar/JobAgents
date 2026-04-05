@@ -3,12 +3,27 @@ jobs.db
 
 # Logs
 fetch_errors.log
+scan_results.log
 
 # Python
 __pycache__/
 *.pyc
 *.pyo
 .env
+venv/
 
 # macOS
 .DS_Store
+
+# Private data (never commit)
+data/profile.json
+data/stories.md
+data/applications.tsv
+
+# Generated outputs
+output/
+reports/
+
+# Batch results
+batch/batch_results.tsv
+

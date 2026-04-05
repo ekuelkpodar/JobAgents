@@ -1,0 +1,25 @@
+statuses:
+  - id: new
+    label: New
+    color: "#6366f1"
+  - id: saved
+    label: Saved
+    color: "#14b8a6"
+  - id: applied
+    label: Applied
+    color: "#3b82f6"
+  - id: phone_screen
+    label: Phone Screen
+    color: "#f59e0b"
+  - id: interview
+    label: Interview
+    color: "#8b5cf6"
+  - id: offer
+    label: Offer
+    color: "#10b981"
+  - id: rejected
+    label: Rejected
+    color: "#ef4444"
+  - id: archived
+    label: Archived
+    color: "#4a526e"

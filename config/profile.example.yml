@@ -1,0 +1,61 @@
+# Application Profile Template
+# Copy this to data/profile.json (as JSON) and fill in your details
+# This is used by the auto-apply agent to fill forms
+
+personal:
+  first_name: "Jane"
+  last_name: "Doe"
+  email: "jane.doe@example.com"
+  phone: "+1-555-123-4567"
+  linkedin: "https://linkedin.com/in/janedoe"
+  github: "https://github.com/janedoe"
+  portfolio: "https://janedoe.dev"
+  location_city: "San Francisco"
+  location_state: "CA"
+  location_country: "United States"
+  willing_to_relocate: false
+  authorized_to_work_us: true
+  require_sponsorship: false
+
+work_preferences:
+  desired_roles:
+    - "AI Engineer"
+    - "ML Engineer"
+    - "Backend Engineer"
+  desired_salary_min: 150000
+  desired_salary_max: 220000
+  remote_preference: "remote"   # remote | hybrid | onsite
+  employment_type: "full_time"
+  start_availability: "2 weeks"
+
+education:
+  degree: "Bachelor of Science"
+  major: "Computer Science"
+  university: "University of Example"
+  graduation_year: 2020
+  gpa: ""   # leave blank if not sharing
+
+experience:
+  years_total: 4
+  current_title: "Software Engineer"
+  current_company: "Current Corp"
+  current_salary: ""   # optional
+
+skills:
+  - Python
+  - TypeScript
+  - Go
+  - AWS
+  - Docker
+  - Kubernetes
+  - LangChain
+  - PostgreSQL
+  - React
+
+cover_letter_template: |
+  I am excited to apply for the {role} position at {company}.
+  My background in {relevant_skills} makes me a strong fit for this role.
+  I am particularly drawn to {company} because of {company_appeal}.
+  I look forward to contributing to your team.
+
+references_available: true

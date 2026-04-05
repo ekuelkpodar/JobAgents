@@ -1,0 +1,107 @@
+# Company Career Portal Configuration
+# Format: company name, ATS platform, and slug/url for direct scraping
+
+ai_labs:
+  - name: Anthropic
+    platform: greenhouse
+    slug: anthropic
+  - name: OpenAI
+    platform: greenhouse
+    slug: openai
+  - name: Mistral AI
+    platform: lever
+    slug: mistral-ai
+  - name: Cohere
+    platform: greenhouse
+    slug: cohere
+  - name: Hugging Face
+    platform: greenhouse
+    slug: huggingface
+  - name: LangChain
+    platform: ashby
+    slug: langchain
+  - name: Pinecone
+    platform: greenhouse
+    slug: pinecone
+
+ai_infra:
+  - name: Weights & Biases
+    platform: lever
+    slug: wandb
+  - name: Arize AI
+    platform: greenhouse
+    slug: arize-ai
+  - name: Langfuse
+    platform: ashby
+    slug: langfuse
+  - name: Retool
+    platform: greenhouse
+    slug: retool
+  - name: Vercel
+    platform: ashby
+    slug: vercel
+  - name: Temporal
+    platform: greenhouse
+    slug: temporal
+
+voice_ai:
+  - name: ElevenLabs
+    platform: ashby
+    slug: elevenlabs
+  - name: Deepgram
+    platform: greenhouse
+    slug: deepgram
+  - name: Hume AI
+    platform: ashby
+    slug: hume-ai
+  - name: Vapi
+    platform: ashby
+    slug: vapi
+
+enterprise_saas:
+  - name: Notion
+    platform: greenhouse
+    slug: notion
+  - name: Linear
+    platform: ashby
+    slug: linear
+  - name: Stripe
+    platform: greenhouse
+    slug: stripe
+  - name: Gong
+    platform: greenhouse
+    slug: gong
+  - name: Twilio
+    platform: greenhouse
+    slug: twilio
+
+automation:
+  - name: n8n
+    platform: ashby
+    slug: n8n
+  - name: Zapier
+    platform: greenhouse
+    slug: zapier
+
+# ATS base URLs
+ats_urls:
+  greenhouse: "https://boards.greenhouse.io/{slug}/jobs"
+  ashby: "https://jobs.ashby.com/{slug}"
+  lever: "https://jobs.lever.co/{slug}"
+
+# Role keywords to filter for — only pull relevant listings
+role_filters:
+  - "engineer"
+  - "developer"
+  - "scientist"
+  - "analyst"
+  - "architect"
+  - "ml"
+  - "ai"
+  - "data"
+  - "devops"
+  - "product manager"
+  - "technical"
+  - "full stack"
+  - "backend"
+  - "frontend"

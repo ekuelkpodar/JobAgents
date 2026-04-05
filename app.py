@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""app.py - JobAgent v2: AI-powered job board with resume matching"""
+"""app.py - JobAgent v2: AI-powered job board with resume matching, A-F grading, archetype detection"""
 
-import io, csv, json, re, sqlite3, threading, time
+import io, csv, json, os, re, sqlite3, threading, time
 from datetime import datetime
 from pathlib import Path
 from flask import Flask, Response, jsonify, request, send_file
@@ -9,8 +9,17 @@ from docx import Document
 from docx.shared import Pt, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 
-DB_PATH    = Path(__file__).parent / "jobs.db"
-OLLAMA_API = "http://localhost:11434/api/generate"
+DB_PATH     = Path(__file__).parent / "jobs.db"
+CV_PATH     = Path(__file__).parent / "cv.md"
+REPORTS_DIR = Path(__file__).parent / "reports"
+OUTPUT_DIR  = Path(__file__).parent / "output"
+REPORTS_DIR.mkdir(exist_ok=True)
+OUTPUT_DIR.mkdir(exist_ok=True)
+
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+
+# Legacy Ollama (kept for fallback only)
+OLLAMA_API   = "http://localhost:11434/api/generate"
 OLLAMA_MODEL = "llama3.2"
 
 app = Flask(__name__)
@@ -55,10 +64,21 @@ def init_db():
             created_at  TEXT DEFAULT (datetime('now'))
         )
     """)
-    try:
-        conn.execute("ALTER TABLE jobs ADD COLUMN location TEXT")
-    except Exception:
-        pass
+    # Migrate: add columns if not present
+    for col_sql in [
+        "ALTER TABLE jobs ADD COLUMN location TEXT",
+        "ALTER TABLE jobs ADD COLUMN score INTEGER",
+        "ALTER TABLE jobs ADD COLUMN grade TEXT",
+        "ALTER TABLE jobs ADD COLUMN gaps TEXT",
+        "ALTER TABLE jobs ADD COLUMN archetype TEXT",
+        "ALTER TABLE jobs ADD COLUMN status TEXT DEFAULT 'new'",
+        "ALTER TABLE jobs ADD COLUMN cv_path TEXT",
+        "ALTER TABLE jobs ADD COLUMN interview_prep_path TEXT",
+    ]:
+        try:
+            conn.execute(col_sql)
+        except Exception:
+            pass
     conn.commit()
     conn.close()
 
@@ -188,7 +208,157 @@ def parse_resume(file_bytes: bytes, filename: str) -> tuple[dict, bool]:
         return result, True
     return parse_simple(text), False
 
-# ── Job matching ──────────────────────────────────────────────────────────────
+# ── Archetype detection ───────────────────────────────────────────────────────
+
+ARCHETYPES = {
+    "AI/ML Engineer":            ["machine learning","ml engineer","ai engineer","deep learning","pytorch","tensorflow","llm","nlp","computer vision","model training","fine-tun"],
+    "AI Product Manager":        ["ai product","product manager","pm","product lead","go-to-market","roadmap","product strategy","ai product manager"],
+    "AI Solutions Architect":    ["solutions architect","enterprise architect","solution engineer","pre-sales","technical architect","cloud architect"],
+    "Data Engineer":             ["data engineer","data pipeline","etl","dbt","airflow","spark","data platform","data infrastructure","warehouse"],
+    "DevOps/MLOps":              ["devops","mlops","sre","platform engineer","infrastructure","kubernetes","ci/cd","reliability","devsecops"],
+    "Frontend/Full-Stack":       ["frontend","full stack","fullstack","react","vue","angular","next.js","ui engineer","web developer"],
+    "Backend Engineer":          ["backend","api","microservices","distributed systems","golang","java","python engineer","systems engineer","node.js"],
+    "Growth/Marketing (AI)":     ["growth","marketing","demand generation","seo","content","gtm","partnerships","developer relations","devrel"],
+    "Technical Writer (AI)":     ["technical writer","documentation","content engineer","developer educator","developer advocate"],
+}
+
+def detect_archetype(title: str, description: str) -> str:
+    text = f"{title} {description}".lower()
+    best, best_score = "Other", 0
+    for archetype, keywords in ARCHETYPES.items():
+        score = sum(1 for kw in keywords if kw in text)
+        if score > best_score:
+            best_score = score
+            best = archetype
+    return best
+
+# ── Grade helpers ─────────────────────────────────────────────────────────────
+
+def score_to_grade(score: int) -> str:
+    if score >= 85: return "A"
+    if score >= 70: return "B"
+    if score >= 55: return "C"
+    if score >= 40: return "D"
+    return "F"
+
+# ── Claude API evaluation (A-F, 10 dimensions) ───────────────────────────────
+
+def evaluate_with_claude(job: dict, cv_text: str) -> dict:
+    """Call Claude API to score a job across 10 weighted dimensions."""
+    if not ANTHROPIC_API_KEY:
+        return _evaluate_local(job, cv_text)
+    try:
+        import anthropic
+        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+        prompt = f"""You are an expert career coach evaluating job fit. Score this job against the candidate's CV.
+
+Return ONLY a valid JSON object with these exact keys:
+{{
+  "scores": {{
+    "role_title_alignment": <0-10>,
+    "hard_skills_overlap": <0-20>,
+    "soft_skills_overlap": <0-10>,
+    "seniority_fit": <0-10>,
+    "remote_location_match": <0-10>,
+    "compensation_range": <0-10>,
+    "company_type_fit": <0-10>,
+    "industry_relevance": <0-10>,
+    "growth_trajectory": <0-5>,
+    "deadline_urgency": <0-5>
+  }},
+  "total": <0-100>,
+  "grade": "<A|B|C|D|F>",
+  "gaps": ["gap 1", "gap 2", "gap 3"],
+  "archetype": "<one of: AI/ML Engineer | AI Product Manager | AI Solutions Architect | Data Engineer | DevOps/MLOps | Frontend/Full-Stack | Backend Engineer | Growth/Marketing (AI) | Technical Writer (AI) | Other>"
+}}
+
+Grading: A=85-100, B=70-84, C=55-69, D=40-54, F=0-39
+
+JOB TITLE: {job.get('title','')}
+JOB DESCRIPTION: {(job.get('description') or '')[:2000]}
+
+CANDIDATE CV:
+{cv_text[:3000]}
+
+JSON:"""
+        msg = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=600,
+            messages=[{"role": "user", "content": prompt}]
+        )
+        raw = msg.content[0].text.strip()
+        m = re.search(r"\{[\s\S]+\}", raw)
+        if m:
+            data = json.loads(m.group())
+            total = data.get("total", 0)
+            return {
+                "score": int(total),
+                "grade": data.get("grade", score_to_grade(total)),
+                "gaps": json.dumps(data.get("gaps", [])),
+                "archetype": data.get("archetype", detect_archetype(job.get("title",""), job.get("description",""))),
+            }
+    except Exception as e:
+        print(f"[Claude eval error] {e}")
+    return _evaluate_local(job, cv_text)
+
+def _evaluate_local(job: dict, cv_text: str) -> dict:
+    """Fallback local scoring when Claude API is unavailable."""
+    title = (job.get("title") or "").lower()
+    desc  = (job.get("description") or "").lower()
+    text  = f"{title} {desc}"
+    cv_lower = cv_text.lower()
+
+    # Extract skills from cv text
+    skills = [s for s in SKILLS_DB if s in cv_lower]
+    hits   = [s for s in skills if s in text]
+
+    # Role alignment
+    title_score = 0
+    for line in cv_text.split("\n")[:20]:
+        words = set(re.split(r"\W+", line.lower())) - {"","and","or","the","a","an"}
+        overlap = [w for w in words if w and len(w) > 3 and w in title]
+        if len(overlap) >= 2:
+            title_score = 10; break
+        elif overlap:
+            title_score = 5
+
+    # Skills overlap
+    hard_skills = min(20, len(hits) * 3)
+    soft_skills = 5 if any(w in text for w in ["communication","leadership","collaboration","mentoring"]) else 0
+
+    # Seniority
+    years_m = re.search(r"(\d+)\+?\s*years?", cv_text, re.IGNORECASE)
+    years = int(years_m.group(1)) if years_m else 0
+    senior_kw = {"senior","staff","lead","principal","director","vp"}
+    junior_kw = {"junior","associate","entry","intern"}
+    tw = set(title.split())
+    if years >= 5 and tw & senior_kw: seniority = 10
+    elif years < 3 and tw & junior_kw: seniority = 10
+    elif 2 <= years <= 7: seniority = 7
+    else: seniority = 4
+
+    remote = 8 if "remote" in text else 5
+    comp   = 5  # neutral
+    co_fit = 7
+    industry = 8 if any(w in text for w in ["tech","software","saas","ai","startup"]) else 5
+    growth = 4
+    urgency = 3
+
+    total = title_score + hard_skills + soft_skills + seniority + remote + comp + co_fit + industry + growth + urgency
+    total = min(100, total)
+    return {
+        "score": total,
+        "grade": score_to_grade(total),
+        "gaps": json.dumps(["Enable Claude API for detailed gap analysis"]),
+        "archetype": detect_archetype(job.get("title",""), job.get("description","")),
+    }
+
+def get_cv_text() -> str:
+    if CV_PATH.exists():
+        return CV_PATH.read_text(encoding="utf-8")
+    return ""
+
+# ── Legacy score_job (used by existing match routes) ─────────────────────────
 
 def score_job(job: dict, resume: dict) -> tuple[int, list[str]]:
     title = (job.get("title") or "").lower()
@@ -403,6 +573,271 @@ def download_matched(sid):
     buf.seek(0)
     return Response(buf.getvalue(), mimetype="text/csv",
                     headers={"Content-Disposition": "attachment;filename=matched_jobs.csv"})
+
+@app.route("/api/evaluate/<int:job_id>", methods=["POST"])
+def api_evaluate(job_id):
+    """Evaluate a single job against cv.md and store the result."""
+    conn = get_db()
+    row  = conn.execute("SELECT * FROM jobs WHERE id=?", [job_id]).fetchone()
+    if not row:
+        conn.close(); return jsonify({"error": "Job not found"}), 404
+    job = dict(row)
+    cv_text = get_cv_text()
+    result  = evaluate_with_claude(job, cv_text)
+    conn.execute(
+        "UPDATE jobs SET score=?, grade=?, gaps=?, archetype=? WHERE id=?",
+        [result["score"], result["grade"], result["gaps"], result["archetype"], job_id]
+    )
+    conn.commit(); conn.close()
+    result["gaps"] = json.loads(result["gaps"]) if isinstance(result["gaps"], str) else result["gaps"]
+    return jsonify(result)
+
+@app.route("/api/evaluate-all", methods=["POST"])
+def api_evaluate_all():
+    """Evaluate all un-scored jobs in background."""
+    def _run():
+        cv_text = get_cv_text()
+        conn = get_db()
+        jobs = conn.execute("SELECT * FROM jobs WHERE score IS NULL LIMIT 200").fetchall()
+        for row in jobs:
+            job = dict(row)
+            try:
+                result = evaluate_with_claude(job, cv_text)
+                conn.execute(
+                    "UPDATE jobs SET score=?, grade=?, gaps=?, archetype=? WHERE id=?",
+                    [result["score"], result["grade"], result["gaps"], result["archetype"], job["id"]]
+                )
+                conn.commit()
+                time.sleep(0.3)
+            except Exception as e:
+                print(f"[eval-all error] job {job['id']}: {e}")
+        conn.close()
+    threading.Thread(target=_run, daemon=True).start()
+    return jsonify({"ok": True, "message": "Evaluation started in background"})
+
+@app.route("/api/jobs/<int:job_id>/status", methods=["PATCH"])
+def update_job_status(job_id):
+    data = request.get_json() or {}
+    status = data.get("status", "new")
+    valid = {"new","saved","applied","phone_screen","interview","offer","rejected","archived"}
+    if status not in valid:
+        return jsonify({"error": f"Invalid status. Valid: {sorted(valid)}"}), 400
+    conn = get_db()
+    conn.execute("UPDATE jobs SET status=? WHERE id=?", [status, job_id])
+    conn.commit(); conn.close()
+    return jsonify({"ok": True, "status": status})
+
+@app.route("/api/jobs/<int:job_id>")
+def get_job(job_id):
+    conn = get_db()
+    row  = conn.execute("SELECT * FROM jobs WHERE id=?", [job_id]).fetchone()
+    conn.close()
+    if not row:
+        return jsonify({"error": "Not found"}), 404
+    j = dict(row)
+    if not j.get("location"):
+        j["location"] = extract_location(j.get("title",""), j.get("description",""))
+    if j.get("gaps") and isinstance(j["gaps"], str):
+        try: j["gaps"] = json.loads(j["gaps"])
+        except Exception: pass
+    return jsonify(j)
+
+@app.route("/api/generate-cv/<int:job_id>", methods=["POST"])
+def generate_cv(job_id):
+    """Generate an ATS-optimized tailored CV for a specific job using Claude API."""
+    if not ANTHROPIC_API_KEY:
+        return jsonify({"error": "ANTHROPIC_API_KEY not set. Export it in your shell."}), 400
+    conn = get_db()
+    row  = conn.execute("SELECT * FROM jobs WHERE id=?", [job_id]).fetchone()
+    if not row:
+        conn.close(); return jsonify({"error": "Job not found"}), 404
+    job = dict(row)
+    conn.close()
+    cv_text = get_cv_text()
+    if not cv_text:
+        return jsonify({"error": "cv.md not found. Add your CV to cv.md first."}), 400
+    try:
+        import anthropic
+        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+        prompt = f"""You are an expert ATS resume writer. Tailor the candidate's CV for this specific job.
+
+Return a complete, tailored CV in markdown format. Requirements:
+1. Extract the top 10-15 ATS keywords from the job description
+2. Naturally inject those keywords into the experience bullet points
+3. Rewrite the summary to match this specific role
+4. Sort skills by relevance to the job description
+5. Keep all facts true — only rephrase, don't invent experience
+
+Return ONLY the markdown CV, no preamble or explanation.
+
+JOB TITLE: {job.get('title','')}
+COMPANY/SOURCE: {job.get('source','')}
+JOB DESCRIPTION: {(job.get('description') or '')[:3000]}
+
+CANDIDATE'S BASE CV:
+{cv_text}
+
+TAILORED CV:"""
+        msg = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=3000,
+            messages=[{"role": "user", "content": prompt}]
+        )
+        tailored_cv = msg.content[0].text.strip()
+        out_path = OUTPUT_DIR / f"cv_{job_id}.md"
+        out_path.write_text(tailored_cv, encoding="utf-8")
+        conn2 = get_db()
+        conn2.execute("UPDATE jobs SET cv_path=? WHERE id=?", [str(out_path), job_id])
+        conn2.commit(); conn2.close()
+        # Try PDF generation via Playwright
+        pdf_path = None
+        try:
+            from generate_pdf import render_cv_pdf
+            pdf_path = render_cv_pdf(tailored_cv, job_id)
+        except Exception as pdf_err:
+            print(f"[PDF gen] {pdf_err} — markdown saved, PDF skipped")
+        return jsonify({
+            "ok": True,
+            "cv_md_path": str(out_path),
+            "pdf_path": str(pdf_path) if pdf_path else None,
+            "preview": tailored_cv[:500] + "..."
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/download-cv/<int:job_id>")
+def download_cv(job_id):
+    pdf_path = OUTPUT_DIR / f"cv_{job_id}.pdf"
+    md_path  = OUTPUT_DIR / f"cv_{job_id}.md"
+    if pdf_path.exists():
+        return send_file(pdf_path, as_attachment=True, download_name=f"cv_{job_id}.pdf")
+    if md_path.exists():
+        return send_file(md_path, as_attachment=True, download_name=f"cv_{job_id}.md")
+    return jsonify({"error": "CV not generated yet. Call /api/generate-cv first."}), 404
+
+@app.route("/api/stories")
+def api_stories():
+    stories_path = Path(__file__).parent / "data" / "stories.md"
+    if stories_path.exists():
+        return Response(stories_path.read_text(encoding="utf-8"), mimetype="text/plain; charset=utf-8")
+    return jsonify({"error": "stories.md not found"}), 404
+
+@app.route("/api/stories", methods=["POST"])
+def api_stories_save():
+    stories_path = Path(__file__).parent / "data" / "stories.md"
+    data = request.get_json() or {}
+    content = data.get("content", "")
+    stories_path.write_text(content, encoding="utf-8")
+    return jsonify({"ok": True})
+
+@app.route("/api/scan", methods=["POST"])
+def api_scan():
+    """Trigger portal scan in background."""
+    def _run():
+        try:
+            import subprocess
+            subprocess.run(["python3", "scan_portals.py"], cwd=str(Path(__file__).parent), timeout=300)
+        except Exception as e:
+            print(f"[scan error] {e}")
+    threading.Thread(target=_run, daemon=True).start()
+    return jsonify({"ok": True, "message": "Portal scan started in background. Check scan_results.log."})
+
+@app.route("/api/apply/<int:job_id>", methods=["POST"])
+def api_apply(job_id):
+    """Launch the Playwright form filler for a job (non-interactive via API)."""
+    def _run():
+        try:
+            import subprocess
+            subprocess.run(
+                ["python3", "apply_agent.py", str(job_id)],
+                cwd=str(Path(__file__).parent)
+            )
+        except Exception as e:
+            print(f"[apply error] {e}")
+    threading.Thread(target=_run, daemon=True).start()
+    return jsonify({"ok": True, "message": f"Apply agent launched for job {job_id}. Check terminal for confirmation prompt."})
+
+@app.route("/api/batch", methods=["POST"])
+def api_batch():
+    """Trigger batch processing via batch_runner.sh."""
+    def _run():
+        try:
+            import subprocess
+            subprocess.run(
+                ["bash", "batch_runner.sh"],
+                cwd=str(Path(__file__).parent),
+                timeout=600
+            )
+        except Exception as e:
+            print(f"[batch error] {e}")
+    threading.Thread(target=_run, daemon=True).start()
+    return jsonify({"ok": True, "message": "Batch processing started. Check batch/batch_results.tsv."})
+
+@app.route("/stories")
+def stories_page():
+    stories_path = Path(__file__).parent / "data" / "stories.md"
+    content = stories_path.read_text(encoding="utf-8") if stories_path.exists() else "# No stories yet."
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Interview Story Bank — JobAgent</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+<style>
+body{{font-family:'Inter',sans-serif;background:#09090f;color:#e2e8f5;max-width:800px;margin:0 auto;padding:40px 20px;line-height:1.7}}
+h1{{color:#818cf8;border-bottom:1px solid #1f2640;padding-bottom:12px}}
+h2{{color:#a78bfa;margin-top:32px}}
+h3{{color:#e2e8f5}}
+strong{{color:#f9e2af}}
+textarea{{width:100%;height:600px;background:#0f1118;color:#e2e8f5;border:1px solid #1f2640;border-radius:10px;padding:16px;font-family:monospace;font-size:13px;resize:vertical}}
+.save-btn{{margin-top:12px;padding:10px 20px;background:#6366f1;color:#fff;border:none;border-radius:8px;cursor:pointer;font-size:14px;font-weight:600}}
+.save-btn:hover{{background:#4f46e5}}
+.msg{{color:#10b981;margin-top:8px;font-size:13px}}
+</style>
+</head>
+<body>
+<h1>Interview Story Bank</h1>
+<p style="color:#8b95b0">Edit your STAR+R stories below. These are used by the AI to generate tailored interview prep per job.</p>
+<form onsubmit="save(event)">
+<textarea id="stories">{content}</textarea>
+<button class="save-btn" type="submit">Save Stories</button>
+<div class="msg" id="msg"></div>
+</form>
+<script>
+async function save(e) {{
+    e.preventDefault();
+    const r = await fetch('/api/stories', {{method:'POST', headers:{{'Content-Type':'application/json'}},
+        body: JSON.stringify({{content: document.getElementById('stories').value}})}});
+    document.getElementById('msg').textContent = r.ok ? 'Saved!' : 'Error saving.';
+}}
+</script>
+</body>
+</html>"""
+    return Response(html, mimetype="text/html; charset=utf-8")
+
+@app.route("/api/health")
+def api_health():
+    """Run pipeline health check and return results."""
+    conn = get_db()
+    total      = conn.execute("SELECT COUNT(*) FROM jobs").fetchone()[0]
+    no_grade   = conn.execute("SELECT COUNT(*) FROM jobs WHERE grade IS NULL").fetchone()[0]
+    by_grade   = dict(conn.execute("SELECT grade, COUNT(*) FROM jobs WHERE grade IS NOT NULL GROUP BY grade").fetchall())
+    by_status  = dict(conn.execute("SELECT status, COUNT(*) FROM jobs GROUP BY status").fetchall())
+    by_arch    = dict(conn.execute("SELECT archetype, COUNT(*) FROM jobs WHERE archetype IS NOT NULL GROUP BY archetype").fetchall())
+    week_apps  = conn.execute(
+        "SELECT COUNT(*) FROM jobs WHERE status='applied' AND fetched_at >= date('now','-7 days')"
+    ).fetchone()[0]
+    active_int = conn.execute("SELECT COUNT(*) FROM jobs WHERE status='interview'").fetchone()[0]
+    conn.close()
+    return jsonify({
+        "total_jobs": total,
+        "jobs_without_grade": no_grade,
+        "by_grade": by_grade,
+        "by_status": by_status,
+        "by_archetype": by_arch,
+        "applied_this_week": week_apps,
+        "active_interviews": active_int,
+    })
 
 @app.route("/api/refresh", methods=["POST"])
 def api_refresh_start():
@@ -921,6 +1356,52 @@ input,select{font:inherit;color:inherit}
 .expand-arrow{transition:transform var(--trans)}
 .job-card.expanded .expand-arrow{transform:rotate(180deg)}
 
+/* ── Grade badge ── */
+.grade-badge{
+  display:inline-flex;align-items:center;
+  font-size:.72rem;font-weight:700;letter-spacing:.05em;
+  padding:2px 8px;border-radius:6px;border:1px solid;
+  flex-shrink:0;
+}
+/* ── Archetype badge ── */
+.b-arch{
+  background:rgba(139,92,246,.12);color:#c4b5fd;border:1px solid rgba(139,92,246,.2);
+}
+/* ── Status pill ── */
+.status-pill{
+  font-size:.69rem;font-weight:600;padding:2px 8px;border-radius:6px;
+  border:1px solid;cursor:pointer;transition:all .15s ease;
+  flex-shrink:0;
+}
+.status-pill:hover{filter:brightness(1.2)}
+/* ── Job action buttons ── */
+.jc-actions{
+  display:flex;flex-wrap:wrap;gap:5px;margin-top:6px;
+}
+.jc-action-btn{
+  font-size:.72rem;font-weight:500;padding:4px 10px;border-radius:6px;
+  border:1px solid var(--border-2);background:var(--surf-2);color:var(--txt-2);
+  cursor:pointer;transition:all .15s ease;
+}
+.jc-action-btn:hover{color:var(--txt);border-color:var(--accent);background:var(--accent-bg)}
+.jc-action-btn:disabled{opacity:.5;cursor:not-allowed}
+.jc-action-archive:hover{border-color:var(--red);color:var(--red);background:rgba(239,68,68,.1)}
+/* ── Gaps ── */
+.jc-gaps{
+  display:flex;flex-wrap:wrap;align-items:center;gap:5px;
+  font-size:.74rem;color:var(--txt-2);
+}
+.gaps-label{font-weight:600;color:var(--txt-3);font-size:.67rem;text-transform:uppercase;letter-spacing:.06em}
+.gap-item{
+  background:rgba(245,158,11,.1);color:#fbbf24;border:1px solid rgba(245,158,11,.2);
+  padding:1px 7px;border-radius:4px;font-size:.69rem;
+}
+/* ── Stats bar ── */
+.stat-item{display:flex;flex-direction:column;align-items:center;gap:1px}
+.stat-val{font-size:1.1rem;font-weight:700;color:var(--txt)}
+.stat-lbl{font-size:.65rem;text-transform:uppercase;letter-spacing:.08em;color:var(--txt-3)}
+.stat-sep{width:1px;height:28px;background:var(--border);margin:0 4px}
+
 /* ── Refresh progress bar ── */
 .refresh-bar{
   position:fixed;top:58px;left:0;right:0;height:2px;z-index:199;
@@ -1010,9 +1491,25 @@ input,select{font:inherit;color:inherit}
       <select class="sb-select" id="sort-sel" onchange="applyFilt()">
         <option value="newest">Newest first</option>
         <option value="oldest">Oldest first</option>
+        <option value="grade">Best grade first</option>
         <option value="source">Source A–Z</option>
         <option value="title">Title A–Z</option>
       </select>
+    </div>
+
+    <div class="sb-section">
+      <div class="sb-label">Grade</div>
+      <div class="ck-list" id="grade-list"></div>
+    </div>
+
+    <div class="sb-section">
+      <div class="sb-label">Archetype</div>
+      <div class="ck-list" id="arch-list"></div>
+    </div>
+
+    <div class="sb-section">
+      <div class="sb-label">Status</div>
+      <div class="ck-list" id="status-list"></div>
     </div>
 
     <div class="sb-section">
@@ -1026,6 +1523,10 @@ input,select{font:inherit;color:inherit}
     </div>
 
     <div class="sb-section" style="gap:8px;display:flex;flex-direction:column">
+      <button class="btn-sb" onclick="evaluateAllJobs()" title="Score all un-evaluated jobs against your CV">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+        Evaluate All
+      </button>
       <button class="btn-sb" onclick="clearFilt()">
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-3.43"/></svg>
         Reset Filters
@@ -1042,6 +1543,20 @@ input,select{font:inherit;color:inherit}
 
     <!-- ── Browse View ── -->
     <div id="v-browse">
+      <!-- Stats bar -->
+      <div id="stats-bar" style="display:flex;align-items:center;gap:20px;padding:10px 22px;background:var(--surf);border-bottom:1px solid var(--border);font-size:.8rem;flex-wrap:wrap">
+        <div class="stat-item"><span class="stat-val" id="stat-total">0</span><span class="stat-lbl">Total Jobs</span></div>
+        <div class="stat-sep"></div>
+        <div class="stat-item"><span class="stat-val" id="stat-a-grade">0</span><span class="stat-lbl">Grade A</span></div>
+        <div class="stat-item"><span class="stat-val" id="stat-b-grade">0</span><span class="stat-lbl">Grade B</span></div>
+        <div class="stat-sep"></div>
+        <div class="stat-item"><span class="stat-val" id="stat-applied">0</span><span class="stat-lbl">Applied</span></div>
+        <div class="stat-item"><span class="stat-val" id="stat-interviews">0</span><span class="stat-lbl">Interviews</span></div>
+        <div class="stat-sep"></div>
+        <div class="stat-item"><span class="stat-val" id="stat-unscored">0</span><span class="stat-lbl">Unscored</span></div>
+        <div style="flex:1"></div>
+        <button class="btn-sb" style="padding:5px 12px;font-size:.76rem;width:auto" onclick="triggerScan()" title="Scan company career portals for new jobs">🔍 Scan Portals</button>
+      </div>
       <div class="toolbar">
         <span class="tbar-count">Showing <strong id="cnt-vis">0</strong> of <strong id="cnt-tot">0</strong> jobs</span>
         <div class="tbar-spacer"></div>
@@ -1246,13 +1761,43 @@ function switchView(v) {
 
 // ── Filter helpers ────────────────────────────────────────────────────────────
 function buildCheckLists() {
-  const cats = {}, srcs = {};
+  const cats = {}, srcs = {}, grades = {}, archs = {}, statuses = {};
   ALL_JOBS.forEach(j => {
-    if (j.category) cats[j.category] = (cats[j.category]||0)+1;
-    if (j.source)   srcs[j.source]   = (srcs[j.source]||0)+1;
+    if (j.category) cats[j.category]     = (cats[j.category]||0)+1;
+    if (j.source)   srcs[j.source]       = (srcs[j.source]||0)+1;
+    if (j.grade)    grades[j.grade]      = (grades[j.grade]||0)+1;
+    if (j.archetype) archs[j.archetype] = (archs[j.archetype]||0)+1;
+    const st = j.status || 'new';
+    statuses[st] = (statuses[st]||0)+1;
   });
-  buildList('cat-list', cats, 'c-');
-  buildList('src-list', srcs, 's-');
+  // Grades sorted A→F
+  const gradeSorted = {};
+  ['A','B','C','D','F'].forEach(g => { if (grades[g]) gradeSorted[g] = grades[g]; });
+  buildList('grade-list', gradeSorted, 'g-');
+  buildList('arch-list',  archs,       'a-');
+  buildList('status-list', statuses,   'st-');
+  buildList('cat-list',   cats,        'c-');
+  buildList('src-list',   srcs,        's-');
+  updateStatsBar();
+}
+
+async function evaluateAllJobs() {
+  toast('Evaluating unscored jobs in background…', '⚡');
+  await fetch('/api/evaluate-all', {method:'POST'});
+}
+
+async function triggerScan() {
+  toast('Portal scan started — check scan_results.log', '🔍');
+  await fetch('/api/scan', {method:'POST'});
+}
+
+function updateStatsBar() {
+  document.getElementById('stat-total').textContent     = ALL_JOBS.length;
+  document.getElementById('stat-a-grade').textContent   = ALL_JOBS.filter(j=>j.grade==='A').length;
+  document.getElementById('stat-b-grade').textContent   = ALL_JOBS.filter(j=>j.grade==='B').length;
+  document.getElementById('stat-applied').textContent   = ALL_JOBS.filter(j=>j.status==='applied').length;
+  document.getElementById('stat-interviews').textContent= ALL_JOBS.filter(j=>j.status==='interview').length;
+  document.getElementById('stat-unscored').textContent  = ALL_JOBS.filter(j=>!j.grade).length;
 }
 function buildList(elId, counts, pfx) {
   const el = document.getElementById(elId);
@@ -1275,20 +1820,29 @@ function debounceFilt() {
   filtTimer = setTimeout(applyFilt, 180);
 }
 function applyFilt() {
-  const q    = (document.getElementById('s-input').value||'').toLowerCase();
-  const sort = document.getElementById('sort-sel').value;
-  const geo  = document.getElementById('geo-sel').value;
-  const cats = new Set([...document.querySelectorAll('[id^="c-"]:checked')].map(c=>c.id.slice(2)));
-  const srcs = new Set([...document.querySelectorAll('[id^="s-"]:checked')].map(c=>c.id.slice(2)));
-  const cut  = filterDays > 0 ? new Date(Date.now() - filterDays * 864e5) : null;
+  const q      = (document.getElementById('s-input').value||'').toLowerCase();
+  const sort   = document.getElementById('sort-sel').value;
+  const geo    = document.getElementById('geo-sel').value;
+  const cats   = new Set([...document.querySelectorAll('[id^="c-"]:checked')].map(c=>c.id.slice(2)));
+  const srcs   = new Set([...document.querySelectorAll('[id^="s-"]:checked')].map(c=>c.id.slice(2)));
+  const grades = new Set([...document.querySelectorAll('[id^="g-"]:checked')].map(c=>c.id.slice(2)));
+  const archs  = new Set([...document.querySelectorAll('[id^="a-"]:checked')].map(c=>c.id.slice(2)));
+  const sts    = new Set([...document.querySelectorAll('[id^="st-"]:checked')].map(c=>c.id.slice(3)));
+  const cut    = filterDays > 0 ? new Date(Date.now() - filterDays * 864e5) : null;
+  const hasGradeFilter = grades.size > 0;
+  const hasArchFilter  = archs.size > 0;
+  const hasStFilter    = sts.size > 0;
 
   FILTERED = ALL_JOBS.filter(j => {
-    if (!cats.has(j.category)) return false;
-    if (!srcs.has(j.source))   return false;
+    if (cats.size && !cats.has(j.category)) return false;
+    if (srcs.size && !srcs.has(j.source))   return false;
+    if (hasGradeFilter && j.grade && !grades.has(j.grade)) return false;
+    if (hasArchFilter  && j.archetype && !archs.has(j.archetype)) return false;
+    if (hasStFilter && !sts.has(j.status||'new')) return false;
     if (geo  && j.location !== geo) return false;
     if (cut  && j.published_date && new Date(j.published_date) < cut) return false;
     if (q) {
-      const hay = `${j.title} ${j.source} ${j.feed_name} ${j.description} ${j.category} ${j.location}`.toLowerCase();
+      const hay = `${j.title} ${j.source} ${j.feed_name} ${j.description} ${j.category} ${j.location} ${j.archetype||''}`.toLowerCase();
       if (!hay.includes(q)) return false;
     }
     return true;
@@ -1299,6 +1853,7 @@ function applyFilt() {
     if (sort==='oldest') return (a.published_date||'').localeCompare(b.published_date||'');
     if (sort==='source') return (a.source||'').localeCompare(b.source||'');
     if (sort==='title')  return (a.title||'').localeCompare(b.title||'');
+    if (sort==='grade')  return ('ABCDF'.indexOf(a.grade||'F')) - ('ABCDF'.indexOf(b.grade||'F'));
     return 0;
   });
 
@@ -1311,7 +1866,7 @@ function clearFilt() {
   document.getElementById('geo-sel').value  = '';
   document.querySelectorAll('.date-pill').forEach(b=>b.classList.toggle('active', b.dataset.days==='7'));
   filterDays = 7;
-  document.querySelectorAll('[id^="c-"],[id^="s-"]').forEach(c=>c.checked=true);
+  document.querySelectorAll('[id^="c-"],[id^="s-"],[id^="g-"],[id^="a-"],[id^="st-"]').forEach(c=>c.checked=true);
   applyFilt();
 }
 function loadMore() { PAGE++; renderJobs(); }
@@ -1359,6 +1914,63 @@ function extractSkills(text) {
   return SKILL_WORDS.filter(s => t.includes(s)).slice(0,12);
 }
 
+// ── Grade helpers ─────────────────────────────────────────────────────────────
+const GRADE_COLORS = { A:'#10b981', B:'#3b82f6', C:'#f59e0b', D:'#ef4444', F:'#6b7280' };
+const STATUS_CYCLE = ['new','saved','applied','phone_screen','interview','offer','rejected','archived'];
+const STATUS_LABELS = { new:'New', saved:'Saved', applied:'Applied', phone_screen:'Phone Screen',
+  interview:'Interview', offer:'Offer', rejected:'Rejected', archived:'Archived' };
+const STATUS_COLORS = { new:'#6366f1', saved:'#14b8a6', applied:'#3b82f6', phone_screen:'#f59e0b',
+  interview:'#8b5cf6', offer:'#10b981', rejected:'#ef4444', archived:'#4a526e' };
+
+async function cycleStatus(jobId, el) {
+  const cur = el.dataset.status || 'new';
+  const idx = STATUS_CYCLE.indexOf(cur);
+  const nxt = STATUS_CYCLE[(idx+1) % STATUS_CYCLE.length];
+  el.dataset.status = nxt;
+  el.textContent = STATUS_LABELS[nxt];
+  el.style.background = STATUS_COLORS[nxt] + '22';
+  el.style.color = STATUS_COLORS[nxt];
+  el.style.borderColor = STATUS_COLORS[nxt] + '55';
+  const j = ALL_JOBS.find(j => j.id === jobId);
+  if (j) j.status = nxt;
+  try { await fetch(`/api/jobs/${jobId}/status`, {method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({status:nxt})}); }
+  catch(e) { toast('Status update failed','⚠️','toast-err'); }
+}
+
+async function evaluateJob(jobId, btn) {
+  btn.textContent = '…scoring';
+  btn.disabled = true;
+  try {
+    const r = await fetch(`/api/evaluate/${jobId}`, {method:'POST'});
+    const d = await r.json();
+    if (d.error) { toast(d.error,'⚠️','toast-err'); }
+    else {
+      const j = ALL_JOBS.find(j => j.id === jobId);
+      if (j) { j.score = d.score; j.grade = d.grade; j.gaps = d.gaps; j.archetype = d.archetype; }
+      toast(`Evaluated: Grade ${d.grade} (${d.score}/100)`, '✅');
+      renderJobs();
+    }
+  } catch(e) { toast('Evaluation failed','⚠️','toast-err'); }
+  btn.textContent = '⚡ Evaluate';
+  btn.disabled = false;
+}
+
+async function generateCV(jobId, btn) {
+  btn.textContent = '…building';
+  btn.disabled = true;
+  try {
+    const r = await fetch(`/api/generate-cv/${jobId}`, {method:'POST'});
+    const d = await r.json();
+    if (d.error) { toast(d.error,'⚠️','toast-err'); }
+    else {
+      toast('Tailored CV ready — downloading...', '📄');
+      window.open(`/api/download-cv/${jobId}`, '_blank');
+    }
+  } catch(e) { toast('CV generation failed','⚠️','toast-err'); }
+  btn.textContent = '📄 Gen CV';
+  btn.disabled = false;
+}
+
 function cardHTML(j, showScore) {
   const saved    = SAVED_IDS.has(j.id);
   const catKey   = (j.category||'General').replace(/[^a-zA-Z]/g,'');
@@ -1368,6 +1980,30 @@ function cardHTML(j, showScore) {
   const loc      = j.location || '';
   const salary   = extractSalary(fullDesc);
   const skills   = extractSkills(fullDesc);
+
+  // Grade badge
+  let gradeHTML = '';
+  if (j.grade) {
+    const gc = GRADE_COLORS[j.grade] || '#6b7280';
+    gradeHTML = `<span class="grade-badge" style="background:${gc}22;color:${gc};border-color:${gc}55" title="Match grade: ${j.grade} (${j.score||'?'}/100)">${j.grade}${j.score != null ? ` · ${j.score}` : ''}</span>`;
+  }
+
+  // Archetype tag
+  const archTag = j.archetype ? `<span class="badge b-arch">${esc(j.archetype)}</span>` : '';
+
+  // Status pill
+  const st = j.status || 'new';
+  const stColor = STATUS_COLORS[st] || '#6366f1';
+  const statusHTML = `<button class="status-pill" data-status="${st}" style="background:${stColor}22;color:${stColor};border-color:${stColor}55" onclick="cycleStatus(${j.id},this)" title="Click to advance status">${STATUS_LABELS[st]||st}</button>`;
+
+  // Gaps tooltip
+  let gapsHTML = '';
+  if (j.gaps && j.gaps.length) {
+    const gaps = Array.isArray(j.gaps) ? j.gaps : (typeof j.gaps === 'string' ? JSON.parse(j.gaps||'[]') : []);
+    if (gaps.length) {
+      gapsHTML = `<div class="jc-gaps"><span class="gaps-label">Gaps:</span> ${gaps.map(g=>`<span class="gap-item">${esc(g)}</span>`).join('')}</div>`;
+    }
+  }
 
   let scoreHTML = '';
   if (showScore && j.match_score != null) {
@@ -1386,6 +2022,7 @@ function cardHTML(j, showScore) {
 
   const extraHTML = `<div class="jc-extra">
     ${salary ? `<div class="jc-salary">💰 ${esc(salary)}</div>` : ''}
+    ${gapsHTML}
     ${skills.length ? `<div>
       <div style="font-size:.67rem;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--txt-3);margin-bottom:5px">Skills mentioned</div>
       <div class="jc-skills">${skills.map(s=>`<span class="jc-skill-chip">${esc(s)}</span>`).join('')}</div>
@@ -1395,20 +2032,31 @@ function cardHTML(j, showScore) {
       <div style="font-size:.8rem;color:var(--txt-2);line-height:1.65;white-space:pre-wrap">${esc(fullDesc)}</div>
     </div>` : ''}
     ${!salary && !skills.length && fullDesc.length <= 220 ? `<div style="font-size:.8rem;color:var(--txt-3);font-style:italic">No additional details in the listing preview — click View to see the full posting.</div>` : ''}
+    <div class="jc-actions">
+      <button class="jc-action-btn" onclick="evaluateJob(${j.id},this)" title="Score this job against your CV">⚡ Evaluate</button>
+      <button class="jc-action-btn" onclick="generateCV(${j.id},this)" title="Generate tailored ATS CV">📄 Gen CV</button>
+      <button class="jc-action-btn" onclick="copyAppJson(${j.id})" title="Copy application profile JSON">📋 Copy JSON</button>
+      <button class="jc-action-btn jc-action-archive" onclick="archiveJob(${j.id})" title="Archive this job">🗑 Archive</button>
+    </div>
   </div>`;
 
-  return `<div class="job-card" data-id="${j.id}">
+  return `<div class="job-card" data-id="${j.id}" data-grade="${j.grade||''}" data-archetype="${esc(j.archetype||'')}">
     <div class="jc-top">
       <div class="jc-title"><a href="${esc(j.url||'#')}" target="_blank" rel="noopener">${esc(j.title||'Untitled')}</a></div>
-      <button class="save-btn${saved?' saved':''}" onclick="toggleSave(${j.id},this)" title="${saved?'Remove from saved':'Save job'}">
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="${saved?'currentColor':'none'}" stroke="currentColor" stroke-width="2"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>
-      </button>
+      <div style="display:flex;align-items:center;gap:6px">
+        ${gradeHTML}
+        <button class="save-btn${saved?' saved':''}" onclick="toggleSave(${j.id},this)" title="${saved?'Remove from saved':'Save job'}">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="${saved?'currentColor':'none'}" stroke="currentColor" stroke-width="2"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>
+        </button>
+      </div>
     </div>
     ${scoreHTML}
     <div class="jc-meta">
       <span class="badge b-source">${esc(j.source||'')}</span>
       ${j.category?`<span class="badge b-cat bc-${catKey}">${esc(j.category)}</span>`:''}
+      ${archTag}
       ${loc?`<span class="badge b-loc">📍 ${esc(loc)}</span>`:''}
+      ${statusHTML}
     </div>
     ${descSnip?`<div class="jc-desc">${descSnip}</div>`:''}
     ${extraHTML}
@@ -1421,6 +2069,24 @@ function cardHTML(j, showScore) {
       <a href="${esc(j.url||'#')}" target="_blank" rel="noopener">View →</a>
     </div>
   </div>`;
+}
+
+async function archiveJob(jobId) {
+  const j = ALL_JOBS.find(j => j.id === jobId);
+  if (j) j.status = 'archived';
+  await fetch(`/api/jobs/${jobId}/status`, {method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({status:'archived'})});
+  toast('Job archived','🗑️');
+  applyFilt();
+}
+
+async function copyAppJson(jobId) {
+  try {
+    const r = await fetch(`/api/jobs/${jobId}`);
+    const j = await r.json();
+    const payload = { job_id: j.id, title: j.title, url: j.url, company: j.source, archetype: j.archetype, grade: j.grade, applied_at: new Date().toISOString() };
+    await navigator.clipboard.writeText(JSON.stringify(payload, null, 2));
+    toast('Application JSON copied to clipboard', '📋');
+  } catch(e) { toast('Copy failed','⚠️','toast-err'); }
 }
 
 // ── Save / Unsave ─────────────────────────────────────────────────────────────

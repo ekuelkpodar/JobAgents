@@ -1,0 +1,4 @@
+# Add job URLs here, one per line, to process in batch
+# Example:
+# https://jobs.ashby.com/anthropic/job/12345
+# https://boards.greenhouse.io/openai/jobs/67890
