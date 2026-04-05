@@ -2450,5 +2450,5 @@ def save_profile():
 
 
 if __name__ == "__main__":
-    print("\n  JobAgent  →  http://localhost:5000\n")
+    print("\n  JobAgent  ->  http://localhost:5000\n")
     app.run(debug=False, port=5000)

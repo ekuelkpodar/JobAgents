@@ -2,7 +2,7 @@
 
 A fully local job aggregator that pulls listings from 100 tech job feeds, matches them to your resume with AI, and lets you fill out a single **Application Profile** that browser agents can use to auto-apply on your behalf.
 
-![Python](https://img.shields.io/badge/Python-3.11+-blue) ![Flask](https://img.shields.io/badge/Flask-3.1-green) ![SQLite](https://img.shields.io/badge/Database-SQLite-orange) ![Ollama](https://img.shields.io/badge/AI-Ollama%20%2F%20LLaMA3-purple)
+![Python](https://img.shields.io/badge/Python-3.11+-blue) ![Flask](https://img.shields.io/badge/Flask-3.1-green) ![SQLite](https://img.shields.io/badge/Database-SQLite-orange) ![Ollama](https://img.shields.io/badge/AI-Ollama%20%2F%20LLaMA3-purple) ![Windows](https://img.shields.io/badge/Windows-compatible-0078D4?logo=windows)
 
 ---
 
@@ -55,6 +55,8 @@ Fill this out once and your browser agent handles the rest. The form covers ever
 ---
 
 ## Quickstart
+
+> **Windows users:** fully supported on Windows 10/11. Use the same commands below in PowerShell, Command Prompt, or Git Bash.
 
 ### 1. Install dependencies
 ```bash
