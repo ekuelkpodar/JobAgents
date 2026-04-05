@@ -11,12 +11,6 @@ A fully local AI job search pipeline. Aggregates 100+ RSS feeds, scores every ro
 
 ---
 
-## Dashboard
-
-![JobAgent Dashboard](Dashboard.png)
-
----
-
 ## What's New in v2
 
 | v1 | v2 |
@@ -230,15 +224,15 @@ JobAgents/
 ```mermaid
 flowchart TD
     subgraph Sources["Job Sources"]
-        XLSX([Tech_Job_RSS_Feeds.xlsx\n100+ feeds])
-        PORTALS([Company Career Portals\nGreenhouse · Ashby · Lever])
-        BATCH([batch/pending_urls.txt\nManual URL list])
+        XLSX([Tech_Job_RSS_Feeds.xlsx - 100+ feeds])
+        PORTALS([Company Career Portals - Greenhouse / Ashby / Lever])
+        BATCH([batch/pending_urls.txt - Manual URL list])
     end
 
     subgraph Ingest["Ingestion Layer"]
-        FETCH[fetch_jobs.py\nRSS fetcher]
-        SCAN[scan_portals.py\nPortal scraper]
-        BRUN[batch_runner.sh\n5 parallel workers]
+        FETCH[fetch_jobs.py - RSS fetcher]
+        SCAN[scan_portals.py - Portal scraper]
+        BRUN[batch_runner.sh - 5 parallel workers]
     end
 
     XLSX --> FETCH
@@ -248,28 +242,27 @@ flowchart TD
     SCAN --> DB
     BRUN --> DB
 
-    DB[(jobs.db\nSQLite)]
+    DB[(jobs.db - SQLite)]
 
-    subgraph AI["AI Layer — provider auto-detected"]
+    subgraph AI["AI Layer - provider auto-detected"]
         PROVIDER{AI Provider}
-        OR[OpenRouter\nOpus / any model]
-        ANT[Anthropic\nClaude Sonnet]
-        OLL[Ollama\nLLaMA3 local]
-        LOCAL[Local\nKeyword scoring]
+        OR[OpenRouter - Opus / any model]
+        ANT[Anthropic - Claude Sonnet]
+        OLL[Ollama - LLaMA3 local]
+        LOCAL[Local - Keyword scoring]
         PROVIDER -->|OPENROUTER_API_KEY| OR
         PROVIDER -->|ANTHROPIC_API_KEY| ANT
-        PROVIDER -->|AI_PROVIDER=ollama| OLL
+        PROVIDER -->|AI_PROVIDER ollama| OLL
         PROVIDER -->|no key| LOCAL
     end
 
     DB --> APP
 
-    subgraph APP["app.py — Flask Server"]
-        direction TB
-        EVAL[POST /api/evaluate\nA-F grade · score · gaps · archetype]
-        GENCV[POST /api/generate-cv\nKeyword-injected tailored CV]
-        STATUS[PATCH /api/jobs/status\nPipeline status update]
-        HEALTH[GET /api/health\nPipeline health report]
+    subgraph APP["app.py - Flask Server"]
+        EVAL[POST /api/evaluate - A-F grade / score / gaps / archetype]
+        GENCV[POST /api/generate-cv - Keyword-injected tailored CV]
+        STATUS[PATCH /api/jobs/status - Pipeline status update]
+        HEALTH[GET /api/health - Pipeline health report]
     end
 
     AI --> EVAL
@@ -277,12 +270,12 @@ flowchart TD
 
     subgraph CV_GEN["CV Generation"]
         GENCV --> CVMD[output/cv_id.md]
-        CVMD --> PDF[generate_pdf.py\nPlaywright PDF render]
-        PDF --> CVPDF[output/cv_id.pdf\nATS-safe Space Grotesk]
+        CVMD --> PDF[generate_pdf.py - Playwright PDF render]
+        PDF --> CVPDF[output/cv_id.pdf - ATS-safe PDF]
     end
 
     subgraph APPLY["Auto-Apply"]
-        AGENT[apply_agent.py\nPlaywright form filler]
+        AGENT[apply_agent.py - Playwright form filler]
         AGENT -->|detect ATS| ATS{ATS Platform}
         ATS --> GH[Greenhouse]
         ATS --> ASH[Ashby]
@@ -295,26 +288,26 @@ flowchart TD
     subgraph INTEGRITY["Pipeline Integrity"]
         DEDUP[dedup_jobs.py]
         NORM[normalize_status.py]
-        HC[health_check.py\nauto-runs after fetch]
+        HC[health_check.py - auto-runs after fetch]
     end
 
     DB --> INTEGRITY
 
-    subgraph DASH["Dashboard — http://localhost:5000"]
-        WEB[Dark-mode Web UI\nVanilla JS · no framework]
-        TUI[Go TUI\nBubble Tea · Lipgloss\nCatppuccin Mocha]
-        WEB --> FILTERS[Grade · Archetype · Status\nCategory · Source · Date · Search]
-        WEB --> CARDS[Job Cards\nGrade badge · Archetype tag\nStatus pipeline · Gap bullets]
-        WEB --> STATSBAR[Stats Bar\nTotal · A-grade · Applied · Interviews]
-        WEB --> ACTIONS[Per-job Actions\nEvaluate · Gen CV · Copy JSON · Archive]
+    subgraph DASH["Dashboard - localhost:5000"]
+        WEB[Dark-mode Web UI - Vanilla JS]
+        TUI[Go TUI - Bubble Tea / Lipgloss]
+        WEB --> FILTERS[Filters: Grade / Archetype / Status / Source / Date]
+        WEB --> CARDS[Job Cards: Grade badge / Archetype tag / Status pipeline]
+        WEB --> STATSBAR[Stats Bar: Total / A-grade / Applied / Interviews]
+        WEB --> ACTIONS[Actions: Evaluate / Gen CV / Copy JSON / Archive]
     end
 
     APP --> DASH
     DB --> TUI
 
-    subgraph PROFILE["Profile & Stories"]
-        PRF[/profile\nApplication Profile Form]
-        STR[/stories\nSTAR+R Story Bank Editor]
+    subgraph PROFILE["Profile and Stories"]
+        PRF[profile page - Application Profile Form]
+        STR[stories page - STAR+R Story Bank Editor]
     end
 
     APP --> PROFILE
